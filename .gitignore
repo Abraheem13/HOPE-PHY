@@ -1,7 +1,8 @@
 __pycache__/
 *.pyc
-results/
-data/
+*.egg-info/
+/data/
+/results/
 *.pt
 *.mat
 wandb/

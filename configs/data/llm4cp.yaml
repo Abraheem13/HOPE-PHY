@@ -1,0 +1,6 @@
+train_path: data/llm4cp/train.mat
+val_path: data/llm4cp/val.mat
+test_path: data/llm4cp/test.mat
+data_key: null
+p_hist: 16
+l_fut: 4

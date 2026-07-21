@@ -1,0 +1,7 @@
+n_series: 64
+t_steps: 400
+n_rb: 12
+n_ant: 4
+severity: 1.0
+p_hist: 16
+l_fut: 4
