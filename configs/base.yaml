@@ -1,0 +1,10 @@
+seed: 42
+out_dir: results
+data:
+  _default: synthetic
+model:
+  _default: lstm
+train:
+  _default: default
+ttt:
+  _default: none

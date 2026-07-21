@@ -1,0 +1,8 @@
+d_model: 256
+backbone: gru
+backbone_layers: 2
+cms_levels: 3
+cms_base_period: 4
+use_titans: true
+titans_hidden: 128
+dropout: 0.1

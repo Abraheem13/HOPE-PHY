@@ -1,0 +1,11 @@
+enabled: true
+lr_slow: 1.0e-5
+lr_ratio: 6.0
+gate_threshold: 0.0
+grad_clip: 1.0
+trust_grad_norm: 10.0
+anchor_decay: 0.995
+anchor_beta: 0.95
+reset_patience: 50
+reset_surprise: 5.0
+uniform_periods: false

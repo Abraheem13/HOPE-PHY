@@ -1,0 +1,24 @@
+name: hope-phy
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - numpy>=1.26
+  - scipy>=1.11
+  - h5py>=3.10            # LLM4CP .mat v7.3 files
+  - matplotlib>=3.8
+  - pandas>=2.1
+  - pytest>=7.4
+  - pip:
+      - torch>=2.3        # install CUDA build matching your driver
+      - einops>=0.7
+      - pyyaml>=6.0
+      - tqdm>=4.66
+      - tensorboard>=2.16
+      - wandb>=0.16       # optional; disable with WANDB_MODE=disabled
+      - mamba-ssm>=2.0    # Mamba baseline (needs CUDA); optional
+      - deepmimo          # ray-traced scenario datasets (Day 6)
+      # sionna requires TF; keep in a separate env or use docker/sionna.Dockerfile

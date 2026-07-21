@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hope-phy"
+version = "0.1.0"
+description = "Test-time continuum memory for 6G channel prediction (HOPE-PHY)"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "h5py>=3.10",
+    "torch>=2.3",
+    "einops>=0.7",
+    "pyyaml>=6.0",
+    "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4", "matplotlib>=3.8", "pandas>=2.1", "tensorboard>=2.16"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
