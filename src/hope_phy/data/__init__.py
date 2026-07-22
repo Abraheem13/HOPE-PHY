@@ -14,7 +14,11 @@ def build_dataset(cfg: dict, split: str = "train"):
             d["n_series"] = max(4, d.get("n_series", 64) // 8)
         return make_synthetic(d)
     if name == "llm4cp":
-        path = d[f"{split}_path"]
-        return LLM4CPDataset(path, p_hist=d.get("p_hist", 16), l_fut=d.get("l_fut", 4),
-                             data_key=d.get("data_key"), limit=d.get("limit"))
+        # val reuses the train files (LLM4CP has no separate val split);
+        # we carve a held-out slice via per_speed_limit for quick validation.
+        s = {"train": "train", "val": "train", "test": "test"}[split]
+        his = d[f"his_{s}_path"]
+        pre = d[f"pre_{s}_path"]
+        lim = d.get("val_per_speed_limit") if split == "val" else d.get("per_speed_limit")
+        return LLM4CPDataset(his, pre, per_speed_limit=lim)
     raise ValueError(f"Unknown dataset '{name}'")
