@@ -68,3 +68,34 @@ def make_blended_stream(cfg: BlendedStreamCfg):
             p = xh.pow(2).mean().sqrt().clamp_min(1e-6)
             xh, yf = xh / p, yf / p
             yield xh.unsqueeze(0), yf.unsqueeze(0), tag
+
+
+@dataclass
+class MultiTimescaleStreamCfg(LLM4CPStreamCfg):
+    n_steps: int = 900
+    jitter_amp: float = 0.35
+    jitter_period: int = 5
+    n_report_bands: int = 5
+
+
+def make_multitimescale_stream(cfg: MultiTimescaleStreamCfg):
+    rng = np.random.default_rng(cfg.seed)
+    uma, umi = _load_pair(cfg)
+    n = min(len(uma), len(umi))
+    order = np.arange(n)
+    rng.shuffle(order)
+
+    jitter = 0.0
+    for t in range(cfg.n_steps):
+        slow = t / max(cfg.n_steps - 1, 1)
+        if t % cfg.jitter_period == 0:
+            jitter = rng.uniform(-cfg.jitter_amp, cfg.jitter_amp)
+        beta = float(np.clip(slow + jitter, 0.0, 1.0))
+        i = int(order[t % n])
+        xa, ya = uma[i]; xb, yb = umi[i]
+        xh = (1 - beta) * xa + beta * xb
+        yf = (1 - beta) * ya + beta * yb
+        p = xh.pow(2).mean().sqrt().clamp_min(1e-6)
+        xh, yf = xh / p, yf / p
+        band = min(int(slow * cfg.n_report_bands), cfg.n_report_bands - 1)
+        yield xh.unsqueeze(0), yf.unsqueeze(0), f"s{band}"

@@ -12,9 +12,9 @@ from ..models.cms.hope_phy import HopePhy
 @dataclass
 class TTTConfig:
     enabled: bool = True
-    lr_slow: float = 1e-4
+    lr_slow: float = 1e-3
     lr_ratio: float = 8.0
-    inner_steps: int = 3
+    inner_steps: int = 8
     med_period: int = 4
     slow_period: int = 16
     grad_clip: float = 1.0
