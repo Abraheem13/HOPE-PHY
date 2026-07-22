@@ -1,31 +1,9 @@
-"""Test-time adaptation (TTA) engine for HOPE-PHY.
-
-Online protocol (zero pilot overhead): at stream step t we predict the next
-L instants from the past P. When the stream advances, the *realised* channel
-for previously-predicted instants arrives for free from the pilot stream --
-these delayed labels drive self-supervised online updates.
-
-Update rule per step t:
-  1. surprise_t = per-sample NMSE of the just-labelled prediction.
-  2. Titans memory write (every step, cheapest, most plastic).
-  3. CMS level k updates only if (t % period_k == 0) AND surprise passes the
-     gate; step size lr_k. Slow levels therefore integrate many surprises.
-  4. Safeguards: (a) gradient-norm clip; (b) skip-update trust region if
-     grad norm explodes; (c) EMA anchor update + stabilisation of the slowest
-     level; (d) hard reset-to-anchor if surprise stays catastrophic for
-     ``reset_patience`` consecutive steps (pathological-drift recovery).
-
-Ablation switches (for the causal-mechanism table):
-  * uniform_periods=True  -> no timescale separation (all levels every step)
-  * gate_threshold=0      -> no surprise gating
-  * anchor_beta=1.0       -> no EMA stabilisation
-"""
+"""Test-time adaptation (TTA) engine for HOPE-PHY -- v2 (adapts enough to bite)."""
 from __future__ import annotations
 
 from dataclasses import dataclass
 
 import torch
-from torch import nn
 
 from ..metrics.nmse import nmse
 from ..models.cms.hope_phy import HopePhy
@@ -34,90 +12,108 @@ from ..models.cms.hope_phy import HopePhy
 @dataclass
 class TTTConfig:
     enabled: bool = True
-    lr_slow: float = 1e-5
-    lr_ratio: float = 6.0          # lr_k = lr_slow * ratio**k
-    gate_threshold: float = 0.0    # update only if surprise > threshold (NMSE)
+    lr_slow: float = 1e-4
+    lr_ratio: float = 8.0
+    inner_steps: int = 3
+    med_period: int = 4
+    slow_period: int = 16
     grad_clip: float = 1.0
-    trust_grad_norm: float = 10.0  # skip update if ||g|| exceeds this
-    anchor_decay: float = 0.995
-    anchor_beta: float = 0.95      # 1.0 disables stabilisation (ablation)
-    reset_patience: int = 50
-    reset_surprise: float = 5.0    # NMSE (linear) considered catastrophic
-    uniform_periods: bool = False  # ablation: strip timescale separation
+    trust_grad_norm: float = 1e4
+    anchor_decay: float = 0.99
+    anchor_beta: float = 0.95
+    reset_patience: int = 40
+    reset_surprise: float = 3.0
+    uniform_periods: bool = False
+    freeze_backbone: bool = False
 
 
 class TTTEngine:
     def __init__(self, model: HopePhy, cfg: TTTConfig):
         self.model, self.cfg = model, cfg
-        groups = model.cms.param_groups(cfg.lr_slow, cfg.lr_ratio)
-        self.levels = [
-            {"params": list(g["params"]), "lr": g["lr"],
-             "period": 1 if cfg.uniform_periods else g["period"]}
-            for g in groups
-        ]
         self.t = 0
-        self._bad_streak = 0
+        self._bad = 0
         self.log: list[dict] = []
 
-    # ------------------------------------------------------------------
+        named = dict(model.named_parameters())
+
+        def pick(pred):
+            return [p for n, p in named.items() if pred(n)]
+
+        n_lvl = model.cms.n_levels
+        fast_lvl, slow_lvl = n_lvl - 1, 0
+        med_lvls = [l for l in range(n_lvl) if l not in (fast_lvl, slow_lvl)]
+
+        fast_params = pick(lambda n: n.startswith("head.")) \
+            + pick(lambda n: n.startswith(f"cms.blocks.{fast_lvl}."))
+        if model.titans is not None:
+            fast_params += pick(lambda n: n.startswith("titans.key_proj") or
+                                          n.startswith("titans.val_proj"))
+        med_params = []
+        for l in med_lvls:
+            med_params += pick(lambda n, l=l: n.startswith(f"cms.blocks.{l}."))
+        slow_params = pick(lambda n: n.startswith(f"cms.blocks.{slow_lvl}."))
+        if not cfg.freeze_backbone:
+            slow_params += pick(lambda n: n.startswith(("inp.", "backbone.")))
+
+        up = cfg.uniform_periods
+        self.groups = [
+            {"name": "fast", "params": fast_params,
+             "lr": cfg.lr_slow * (cfg.lr_ratio ** 2), "period": 1},
+            {"name": "med", "params": med_params or [torch.nn.Parameter(torch.zeros(1))],
+             "lr": cfg.lr_slow * cfg.lr_ratio, "period": 1 if up else cfg.med_period},
+            {"name": "slow", "params": slow_params,
+             "lr": cfg.lr_slow, "period": 1 if up else cfg.slow_period},
+        ]
+
     def observe(self, x_hist: torch.Tensor, y_true: torch.Tensor) -> dict:
-        """One stream step: label arrives for (x_hist -> y_true); adapt."""
         if not self.cfg.enabled:
-            return {"t": self.t, "updated_levels": [], "surprise": None}
+            return {"t": self.t, "surprise": None, "updated": []}
         self.t += 1
         model, cfg = self.model, self.cfg
-
-        # --- surprise + delayed-label loss --------------------------------
         model.train()
-        pred = model(x_hist)
-        loss = nmse(pred, y_true)
-        surprise = float(loss)
 
-        # --- Titans write (every step) ------------------------------------
         if model.titans is not None:
             with torch.no_grad():
                 feat = model.encode(x_hist)
-                tgt_feat = model.encode(y_true) if y_true.shape[1] == x_hist.shape[1] \
-                    else feat  # v0: self-key; v1: dedicated target encoder
-            model.titans.write(feat, tgt_feat)
+            model.titans.write(feat, feat)
 
-        # --- CMS multi-rate updates ---------------------------------------
+        surprise0 = None
         updated = []
-        if surprise > cfg.gate_threshold:
-            grads = torch.autograd.grad(
-                loss, [p for lv in self.levels for p in lv["params"]],
-                allow_unused=True)
+        for step in range(cfg.inner_steps):
+            pred = model(x_hist)
+            loss = nmse(pred, y_true)
+            if surprise0 is None:
+                surprise0 = loss.detach().item()
+            active = [g for g in self.groups if self.t % g["period"] == 0]
+            params = [p for g in active for p in g["params"]]
+            grads = torch.autograd.grad(loss, params, allow_unused=True)
             gi = 0
-            for lv in self.levels:
-                n = len(lv["params"])
-                lv_grads = grads[gi: gi + n]
-                gi += n
-                if self.t % lv["period"] != 0:
+            for g in active:
+                gp = grads[gi: gi + len(g["params"])]
+                gi += len(g["params"])
+                gn = torch.sqrt(sum((x ** 2).sum() for x in gp if x is not None)).item() \
+                    if any(x is not None for x in gp) else 0.0
+                if gn == 0.0 or gn > cfg.trust_grad_norm:
                     continue
-                gnorm = torch.sqrt(sum((g ** 2).sum() for g in lv_grads
-                                       if g is not None)).item() if any(
-                    g is not None for g in lv_grads) else 0.0
-                if gnorm > cfg.trust_grad_norm or gnorm == 0.0:
-                    continue                                   # trust region
+                scale = min(1.0, cfg.grad_clip / (gn + 1e-12))
                 with torch.no_grad():
-                    scale = min(1.0, cfg.grad_clip / (gnorm + 1e-12))
-                    for p, g in zip(lv["params"], lv_grads):
-                        if g is not None:
-                            p.add_(g, alpha=-lv["lr"] * scale)
-                updated.append(lv["period"])
+                    for p, gr in zip(g["params"], gp):
+                        if gr is not None:
+                            p.add_(gr, alpha=-g["lr"] * scale)
+                if step == 0:
+                    updated.append(g["name"])
 
-        # --- anchor maintenance + catastrophic-drift safeguard ------------
         model.cms.update_anchor(cfg.anchor_decay)
         if cfg.anchor_beta < 1.0:
             model.cms.stabilise_to_anchor(cfg.anchor_beta)
-        self._bad_streak = self._bad_streak + 1 if surprise > cfg.reset_surprise else 0
-        if self._bad_streak >= cfg.reset_patience:
+        self._bad = self._bad + 1 if surprise0 > cfg.reset_surprise else 0
+        if self._bad >= cfg.reset_patience:
             model.cms.reset_slow_to_anchor()
             if model.titans is not None:
                 model.titans.reset_state()
-            self._bad_streak = 0
+            self._bad = 0
 
-        rec = {"t": self.t, "surprise": surprise, "updated_levels": updated}
-        self.log.append(rec)
         model.eval()
+        rec = {"t": self.t, "surprise": surprise0, "updated": updated}
+        self.log.append(rec)
         return rec
