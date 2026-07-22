@@ -1,9 +1,7 @@
-# TDD by default (uplink target). For FDD, point pre_* to H_D_pre_* files.
 his_train_path: "data/llm4cp/Training Dataset/H_U_his_train.mat"
 pre_train_path: "data/llm4cp/Training Dataset/H_U_pre_train.mat"
 his_test_path: "data/llm4cp/Testing Dataset/H_U_his_test.mat"
 pre_test_path: "data/llm4cp/Testing Dataset/H_U_pre_test.mat"
-per_speed_limit: null       # null = all 900 blocks/speed
-val_per_speed_limit: 20     # small held-out slice for validation during training
+val_blocks: 20
 p_hist: 16
 l_fut: 4

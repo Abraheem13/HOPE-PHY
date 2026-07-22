@@ -1,11 +1,10 @@
-epochs: 50           # 500 for paper runs (LLM4CP protocol)
-batch_size: 128      # 512 for paper runs
+epochs: 300
+batch_size: 256
 lr: 1.0e-3
-lr_step: 150
-lr_gamma: 0.1
+lr_step: 100        # LR drops at epoch 100 and 200 (now actually triggers)
+lr_gamma: 0.3
 grad_clip: 1.0
-# HOPE-PHY multi-rate spectrum (geometric): lr_k = cms_lr_slow * ratio**k
 cms_lr_slow: 1.0e-4
 cms_lr_ratio: 6.0
 anchor_decay: 0.995
-workers: 2
+workers: 4
