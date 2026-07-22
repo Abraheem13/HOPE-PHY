@@ -1,17 +1,4 @@
-"""Loader for the LLM4CP released QuaDRiGa dataset (PKU-PCNI/LLM4CP).
-
-Input and target live in SEPARATE .mat files (per readme.txt):
-  H_U_his_{split}: [900,10,16,48,4,4,2]  historical uplink (P=16, input)
-  H_U_pre_{split}: [900,10, 4,48,4,4,2]  future uplink     (L=4, TDD target)
-  H_D_pre_{split}: [900,10, 4,48,4,4,2]  future downlink   (L=4, FDD target)
-
-Logical axes: [block, speed, time, subcarrier(48), Nh(4), Nv/pol(4), pol(2)].
-D = 48*4*4*2 = 1536 complex -> 3072 real (Re/Im stacked).
-
-h5py transposes MATLAB arrays and the two files use different orders, so we
-locate the time axis by its known length (16 vs 4), fold (block,speed) into the
-sample axis, flatten the rest into D. Robust to either storage order.
-"""
+"""Loader for the LLM4CP released QuaDRiGa dataset (PKU-PCNI/LLM4CP)."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -40,8 +27,7 @@ def _load_mat_array(path: Path, key: str | None = None) -> np.ndarray:
         return d[k]
 
 
-def _canonicalize(arr: np.ndarray, t_len: int, n_blocks: int, n_speeds: int) -> np.ndarray:
-    """Reshape arbitrary-order LLM4CP array to canonical [N, T, D] complex."""
+def _canonicalize(arr, t_len, n_blocks, n_speeds):
     shape = list(arr.shape)
 
     def _find(size, used):
@@ -50,13 +36,13 @@ def _canonicalize(arr: np.ndarray, t_len: int, n_blocks: int, n_speeds: int) -> 
                 return i
         raise ValueError(f"axis of size {size} not found in {shape}")
 
-    used: list[int] = []
+    used = []
     ax_block = _find(n_blocks, used); used.append(ax_block)
     ax_speed = _find(n_speeds, used); used.append(ax_speed)
     ax_time = _find(t_len, used); used.append(ax_time)
     rest = [i for i in range(arr.ndim) if i not in used]
     arr = np.transpose(arr, [ax_block, ax_speed, ax_time, *rest])
-    return arr.reshape(n_blocks * n_speeds, t_len, -1)
+    return arr.reshape(n_blocks, n_speeds, t_len, -1)
 
 
 class LLM4CPDataset(Dataset):
@@ -71,26 +57,28 @@ class LLM4CPDataset(Dataset):
         his = _load_mat_array(Path(his_path))
         pre = _load_mat_array(Path(pre_path))
 
-        # test files: 100 blocks/speed; auto-detect the block axis size.
         if nb not in his.shape:
             cand = [s for s in his.shape if s not in (self.P_LEN, 48, 4, 2)]
             nb = max(cand)
 
-        his = _canonicalize(his, self.P_LEN, nb, ns)   # [N,16,D]
-        pre = _canonicalize(pre, self.L_LEN, nb, ns)   # [N, 4,D]
-        assert his.shape[0] == pre.shape[0], (his.shape, pre.shape)
-        assert his.shape[2] == pre.shape[2], (his.shape, pre.shape)
+        his = _canonicalize(his, self.P_LEN, nb, ns)
+        pre = _canonicalize(pre, self.L_LEN, nb, ns)
+        b = min(his.shape[0], pre.shape[0])
+        if per_speed_limit:
+            b = min(b, per_speed_limit)
+        his, pre = his[:b], pre[:b]
 
         his = complex_to_real(his).astype(np.float32)
         pre = complex_to_real(pre).astype(np.float32)
+        B, S = his.shape[0], his.shape[1]
+        self.speed_index = np.tile(np.arange(S), B)
+        his = his.reshape(B * S, self.P_LEN, -1)
+        pre = pre.reshape(B * S, self.L_LEN, -1)
 
-        if per_speed_limit:
-            keep = np.arange(min(per_speed_limit * ns, his.shape[0]))
-            his, pre = his[keep], pre[keep]
-
-        norm = PowerNormalizer() if normalize else (lambda a, b: (a, b))
+        norm = PowerNormalizer() if normalize else (lambda a, c: (a, c))
         self.samples = [norm(h, p) for h, p in zip(his, pre)]
         self.feat_dim = self.samples[0][0].shape[-1]
+        self.n_speeds = S
 
     def __len__(self):
         return len(self.samples)
