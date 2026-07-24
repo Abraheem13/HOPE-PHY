@@ -41,6 +41,13 @@ def _canonicalize(arr, t_len, n_blocks, n_speeds):
     ax_speed = _find(n_speeds, used); used.append(ax_speed)
     ax_time = _find(t_len, used); used.append(ax_time)
     rest = [i for i in range(arr.ndim) if i not in used]
+    # CRITICAL: h5py reverses MATLAB axis order, and the his/pre files are
+    # stored differently. If this array is reverse-stored (block axis appears
+    # AFTER the time axis), its trailing feature axes are also reversed, so we
+    # flip them to a common (subcarrier, Nh, Nv, pol) order. Without this the
+    # input and target feature vectors index different subcarriers/antennas.
+    if ax_block > ax_time:
+        rest = rest[::-1]
     arr = np.transpose(arr, [ax_block, ax_speed, ax_time, *rest])
     return arr.reshape(n_blocks, n_speeds, t_len, -1)
 
