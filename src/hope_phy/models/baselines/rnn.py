@@ -23,5 +23,5 @@ class RecurrentPredictor(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         out, _ = self.encoder(x)
-        y = self.head(out[:, -1])
-        return y.view(x.shape[0], self.l_fut, self.feat_dim)
+        y = self.head(out[:, -1]).view(x.shape[0], self.l_fut, self.feat_dim)
+        return x[:, -1:].detach() + y   # residual prediction

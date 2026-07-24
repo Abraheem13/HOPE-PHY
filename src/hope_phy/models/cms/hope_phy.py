@@ -62,8 +62,8 @@ class HopePhy(nn.Module):
         z = self.cms(h)
         if self.titans is not None:
             z = torch.cat([z, self.titans(h)], dim=-1)
-        y = self.head(z)
-        return y.view(x.shape[0], self.l_fut, self.feat_dim)
+        y = self.head(z).view(x.shape[0], self.l_fut, self.feat_dim)
+        return x[:, -1:].detach() + y   # residual prediction
 
     # ----- multi-rate optimisation groups ----------------------------------
     def param_groups(self, lr_base: float, cms_lr_slow: float, cms_lr_ratio: float) -> list[dict]:

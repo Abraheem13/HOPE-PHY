@@ -35,5 +35,8 @@ class TransformerPredictor(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         h = self.encoder(self.pos(self.inp(x)))
-        y = self.head(h[:, -1])
-        return y.view(x.shape[0], self.l_fut, self.feat_dim)
+        y = self.head(h[:, -1]).view(x.shape[0], self.l_fut, self.feat_dim)
+        # residual prediction: anchor on the last observed frame so the model
+        # only learns the DELTA. At low mobility the optimal delta is ~0, so
+        # this inherits the strong persistence baseline for free.
+        return x[:, -1:].detach() + y
